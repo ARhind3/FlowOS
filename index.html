@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0f1f35" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FlowOS Logic" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="assets/icon-192.png" />
+  <link rel="icon" href="assets/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>FlowOS Logic</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">F</div>
+        <div class="brand-copy">
+          <strong>FlowOS Logic</strong>
+          <span id="saveStatus">Saved locally</span>
+        </div>
+      </div>
+      <button id="projectTitleBtn" class="title-button" aria-label="Rename project">Untitled Logic</button>
+      <button id="moreBtn" class="icon-button" aria-label="More options">•••</button>
+    </header>
+
+    <main id="workspace">
+      <svg id="canvas" aria-label="Logic canvas">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"></path>
+          </marker>
+          <filter id="nodeShadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="3" stdDeviation="5" flood-opacity="0.14"/>
+          </filter>
+        </defs>
+        <g id="viewport">
+          <g id="edgeLayer"></g>
+          <g id="nodeLayer"></g>
+        </g>
+      </svg>
+      <div id="modeHint" class="mode-hint hidden"></div>
+      <div id="emptyState" class="empty-state hidden">
+        <div class="empty-icon">↗</div>
+        <h2>Build the logic</h2>
+        <p>Add a statement, then connect it to what it causes or requires.</p>
+        <button id="emptyAddBtn" class="primary-button">Add first statement</button>
+      </div>
+    </main>
+
+    <nav class="bottom-bar" aria-label="Primary actions">
+      <button id="addBtn" class="toolbar-button"><span class="toolbar-icon">＋</span><span>Add</span></button>
+      <button id="connectBtn" class="toolbar-button"><span class="toolbar-icon">↗</span><span>Connect</span></button>
+      <button id="andBtn" class="toolbar-button"><span class="toolbar-icon">⋀</span><span>AND</span></button>
+      <button id="fileBtn" class="toolbar-button"><span class="toolbar-icon">⇅</span><span>File</span></button>
+    </nav>
+  </div>
+
+  <div id="scrim" class="scrim hidden"></div>
+
+  <section id="nodeSheet" class="sheet hidden" aria-modal="true" role="dialog">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2>Statement</h2>
+      <button class="text-button" data-close-sheet="nodeSheet">Done</button>
+    </div>
+    <label>Text
+      <textarea id="nodeTitle" rows="3" maxlength="600" placeholder="What must be true?"></textarea>
+    </label>
+    <div class="two-col">
+      <label>Type
+        <select id="nodeClass"></select>
+      </label>
+      <label>Confidence
+        <select id="nodeConfidence">
+          <option value="0.5">Medium</option>
+          <option value="0.8">High</option>
+          <option value="0.2">Low</option>
+        </select>
+      </label>
+    </div>
+    <label>Notes / assumptions
+      <textarea id="nodeAnnotation" rows="5" placeholder="Capture assumptions, CLR questions, evidence, or context…"></textarea>
+    </label>
+    <div class="sheet-actions">
+      <button id="duplicateNodeBtn" class="secondary-button">Duplicate</button>
+      <button id="deleteNodeBtn" class="danger-button">Delete</button>
+    </div>
+  </section>
+
+  <section id="edgeSheet" class="sheet compact hidden" aria-modal="true" role="dialog">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2 id="edgeSheetTitle">Connection</h2>
+      <button class="text-button" data-close-sheet="edgeSheet">Done</button>
+    </div>
+    <p id="edgeDescription" class="sheet-help"></p>
+    <label>Connection notes
+      <textarea id="edgeAnnotation" rows="4" placeholder="Why does this relationship exist?"></textarea>
+    </label>
+    <button id="deleteEdgeBtn" class="danger-button full-width">Delete connection</button>
+  </section>
+
+  <section id="andSheet" class="sheet hidden" aria-modal="true" role="dialog">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2>Explicit AND</h2>
+      <button class="text-button" data-close-sheet="andSheet">Cancel</button>
+    </div>
+    <p class="sheet-help">Choose two or more jointly necessary conditions, then the effect they combine to produce.</p>
+    <div class="field-label">Required conditions</div>
+    <div id="andInputs" class="check-list"></div>
+    <label>Effect
+      <select id="andOutput"></select>
+    </label>
+    <button id="createAndBtn" class="primary-button full-width">Create AND relationship</button>
+  </section>
+
+  <section id="fileSheet" class="sheet hidden" aria-modal="true" role="dialog">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2>File</h2>
+      <button class="text-button" data-close-sheet="fileSheet">Done</button>
+    </div>
+    <div class="menu-list">
+      <button id="newProjectBtn"><span>New blank model</span><small>Start fresh</small></button>
+      <button id="importBtn"><span>Import RIT JSON</span><small>Open an existing model</small></button>
+      <button id="exportBtn"><span>Export RIT JSON</span><small>Save to Files / Flying Logic</small></button>
+      <button id="shareBtn"><span>Share JSON</span><small>Send to ChatGPT, AirDrop, Files, etc.</small></button>
+      <button id="copyBtn"><span>Copy JSON</span><small>Paste directly into ChatGPT</small></button>
+      <button id="pasteBtn"><span>Paste revised JSON</span><small>Bring ChatGPT's revised model back in</small></button>
+      <button id="autoLayoutBtn"><span>Auto layout</span><small>Reorganize the current model</small></button>
+      <button id="fitBtn"><span>Fit model on screen</span><small>Center everything</small></button>
+    </div>
+  </section>
+
+  <section id="moreSheet" class="sheet hidden" aria-modal="true" role="dialog">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2>Project</h2>
+      <button class="text-button" data-close-sheet="moreSheet">Done</button>
+    </div>
+    <label>Project title
+      <input id="projectTitleInput" type="text" maxlength="120" />
+    </label>
+    <div class="stats-card">
+      <div><strong id="entityCount">0</strong><span>Statements</span></div>
+      <div><strong id="edgeCount">0</strong><span>Links</span></div>
+      <div><strong id="andCount">0</strong><span>ANDs</span></div>
+    </div>
+    <div class="about-box">
+      <strong>MVP rule</strong>
+      <p>This app only helps you capture connected logic quickly. Challenge and refine the logic in ChatGPT; finish presentation-quality work in Flying Logic later.</p>
+    </div>
+  </section>
+
+  <section id="renameSheet" class="sheet compact hidden" aria-modal="true" role="dialog">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header"><h2>Rename</h2><button class="text-button" data-close-sheet="renameSheet">Done</button></div>
+    <label>Project title<input id="renameInput" type="text" maxlength="120" /></label>
+  </section>
+
+  <input id="fileInput" type="file" accept="application/json,.json" hidden />
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
