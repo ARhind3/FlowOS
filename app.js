@@ -5,6 +5,10 @@
   const NODE_W = 220;
   const NODE_H = 94;
   const JUNCTOR_SIZE = 30;
+  const LAYOUT_VERSION = 2;
+  const LEVEL_GAP = 190;
+  const NODE_GAP = 72;
+  const GROUP_GAP = 150;
   const svgNS = 'http://www.w3.org/2000/svg';
 
   const classOptions = [
@@ -50,13 +54,13 @@
         entity_operator: 'AND',
         default_junctor_operator: 'OR'
       },
-      document_attributes: {},
+      document_attributes: { FLOWOS_LAYOUT_VERSION: LAYOUT_VERSION, FLOWOS_LAYOUT_ENGINE: 'hierarchical_barycentric_v2' },
       entities: [],
       junctors: [],
       groups: [],
       edges: [],
       export_metadata: {
-        exporter: 'FlowOS Logic MVP',
+        exporter: 'FlowOS Logic MVP 1.1',
         purpose: 'Mobile logic capture and RIT/Flying Logic interchange',
         counts: { entities: 0, junctors: 0, groups: 0, edges: 0 }
       },
@@ -91,6 +95,7 @@
     data.edges = Array.isArray(data.edges) ? data.edges : [];
     data.export_metadata = data.export_metadata || {};
     const hadStoredLayout = hasAnyStoredLayout(data);
+    const layoutVersion = Number(data.document_attributes?.FLOWOS_LAYOUT_VERSION || 0);
     data.entities.forEach((n, i) => normalizeEntity(n, i));
     data.junctors.forEach((j, i) => normalizeJunctor(j, i));
     data.edges.forEach((e, i) => {
@@ -101,7 +106,7 @@
       e.attributes = e.attributes || {};
     });
     ensureUniqueIDs(data);
-    if (!hadStoredLayout) autoLayout(data, false);
+    if (!hadStoredLayout || layoutVersion < LAYOUT_VERSION) autoLayout(data, false);
     updateCounts(data);
     return data;
   }
@@ -146,7 +151,7 @@
 
   function updateCounts(target = model) {
     target.export_metadata = target.export_metadata || {};
-    target.export_metadata.exporter = 'FlowOS Logic MVP';
+    target.export_metadata.exporter = 'FlowOS Logic MVP 1.1';
     target.export_metadata.purpose = 'Mobile logic capture and RIT/Flying Logic interchange';
     target.export_metadata.counts = {
       entities: target.entities.length,
@@ -314,19 +319,20 @@
 
   function renderEdges() {
     edgeLayer.replaceChildren();
+    const related = selectedNodeId ? relatedIDs(selectedNodeId) : null;
+    const overview = camera.scale < 0.34;
     for (const edge of model.edges) {
       const a = anchorFor(edge.from, edge.to, true);
       const b = anchorFor(edge.to, edge.from, false);
       if (!a || !b) continue;
       const path = document.createElementNS(svgNS, 'path');
-      path.setAttribute('class', 'edge-line');
-      const dx = Math.abs(b.x-a.x), dy = Math.abs(b.y-a.y);
-      const bend = Math.max(38, Math.min(150, (dx+dy)*0.28));
-      const c1 = {x:a.x, y:a.y - Math.sign(a.y-b.y || -1)*bend};
-      const c2 = {x:b.x, y:b.y + Math.sign(a.y-b.y || -1)*bend};
-      const d = `M ${a.x} ${a.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${b.x} ${b.y}`;
+      const isRelated = !related || related.has(edge.from) || related.has(edge.to);
+      const relationClass = related ? (isRelated ? ' related' : ' unrelated') : '';
+      path.setAttribute('class', `edge-line${relationClass}${edge.is_back_edge ? ' back-edge' : ''}`);
+      const d = routedEdgePath(edge, a, b);
       path.setAttribute('d', d);
       path.dataset.edgeId = edge.id;
+      if (overview && !isRelated) path.setAttribute('marker-end', 'none');
       edgeLayer.appendChild(path);
       const hit = document.createElementNS(svgNS, 'path');
       hit.setAttribute('class', 'edge-hit');
@@ -337,6 +343,34 @@
     }
   }
 
+  function routedEdgePath(edge, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    // Normal FlowOS hierarchy runs from a prerequisite below to an effect above.
+    // Keep those links vertically disciplined; side-route back/same-level links.
+    if (Math.abs(dy) >= 45 && !edge.is_back_edge) {
+      const direction = Math.sign(dy || -1);
+      const spread = Math.max(38, Math.min(120, Math.abs(dy) * 0.42));
+      return `M ${a.x} ${a.y} C ${a.x} ${a.y + direction*spread}, ${b.x} ${b.y - direction*spread}, ${b.x} ${b.y}`;
+    }
+    const side = Math.sign(dx || 1);
+    const bend = Math.max(70, Math.min(220, Math.abs(dx) * 0.35 + 70));
+    return `M ${a.x} ${a.y} C ${a.x + side*bend} ${a.y}, ${b.x - side*bend} ${b.y}, ${b.x} ${b.y}`;
+  }
+
+  function relatedIDs(id) {
+    const ids = new Set([id]);
+    for (const e of model.edges) {
+      if (e.from === id || e.to === id) { ids.add(e.from); ids.add(e.to); }
+    }
+    // Treat an AND junctor as transparent for neighborhood highlighting.
+    for (const j of model.junctors) {
+      if (!ids.has(j.id)) continue;
+      for (const e of model.edges) if (e.from === j.id || e.to === j.id) { ids.add(e.from); ids.add(e.to); }
+    }
+    return ids;
+  }
+
   function anchorFor(id, otherId, leaving) {
     const p = nodePosition(id), q = nodePosition(otherId);
     if (!p || !q) return null;
@@ -344,20 +378,24 @@
     const hw = isJunctor ? JUNCTOR_SIZE/2 : NODE_W/2;
     const hh = isJunctor ? JUNCTOR_SIZE/2 : NODE_H/2;
     const dx = q.x-p.x, dy=q.y-p.y;
-    if (Math.abs(dx/hw) > Math.abs(dy/hh)) return {x:p.x + Math.sign(dx||1)*hw, y:p.y};
-    return {x:p.x, y:p.y + Math.sign(dy||1)*hh};
+    // Prefer vertical ports in hierarchical layouts. This removes the large side loops
+    // that made dense imported models look like a knot of spaghetti.
+    if (Math.abs(dy) > 36) return {x:p.x, y:p.y + Math.sign(dy||1)*hh};
+    return {x:p.x + Math.sign(dx||1)*hw, y:p.y};
   }
 
   function renderNodes() {
     nodeLayer.replaceChildren();
-    for (const n of model.entities) nodeLayer.appendChild(entitySVG(n));
-    for (const j of model.junctors) nodeLayer.appendChild(junctorSVG(j));
+    const neighborhood = selectedNodeId ? relatedIDs(selectedNodeId) : null;
+    for (const n of model.entities) nodeLayer.appendChild(entitySVG(n, neighborhood));
+    for (const j of model.junctors) nodeLayer.appendChild(junctorSVG(j, neighborhood));
   }
 
-  function entitySVG(n) {
+  function entitySVG(n, neighborhood=null) {
     const p = nodePosition(n.id);
     const g = document.createElementNS(svgNS,'g');
-    g.setAttribute('class', `node${selectedNodeId===n.id?' selected':''}${connectSourceId===n.id?' connect-source':''}`);
+    const unrelated = neighborhood && !neighborhood.has(n.id);
+    g.setAttribute('class', `node${selectedNodeId===n.id?' selected':''}${connectSourceId===n.id?' connect-source':''}${unrelated?' unrelated':''}`);
     g.setAttribute('transform', `translate(${p.x-NODE_W/2},${p.y-NODE_H/2})`);
     g.dataset.nodeId = n.id;
     const rect=document.createElementNS(svgNS,'rect');rect.setAttribute('width',NODE_W);rect.setAttribute('height',NODE_H);rect.setAttribute('fill',fillForClass(n.class));
@@ -370,8 +408,8 @@
     return g;
   }
 
-  function junctorSVG(j) {
-    const p=nodePosition(j.id);const g=document.createElementNS(svgNS,'g');g.setAttribute('class','junctor');g.setAttribute('transform',`translate(${p.x},${p.y})`);g.dataset.junctorId=j.id;
+  function junctorSVG(j, neighborhood=null) {
+    const p=nodePosition(j.id);const g=document.createElementNS(svgNS,'g');g.setAttribute('class',`junctor${neighborhood&&!neighborhood.has(j.id)?' unrelated':''}`);g.setAttribute('transform',`translate(${p.x},${p.y})`);g.dataset.junctorId=j.id;
     const poly=document.createElementNS(svgNS,'polygon');const s=JUNCTOR_SIZE/2;poly.setAttribute('points',`0,${-s} ${s},0 0,${s} ${-s},0`);g.appendChild(poly);
     const t=document.createElementNS(svgNS,'text');t.setAttribute('x','0');t.setAttribute('y','1');t.textContent=j.operator;g.appendChild(t);
     g.addEventListener('pointerdown', ev => junctorPointerDown(ev,j.id));
@@ -454,13 +492,18 @@
   }
   function updatePinch(){
     const pts=[...pointerState.values()];if(pts.length<2)return;const center={x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2};
-    const ratio=distance(pts[0],pts[1])/gesture.startDistance;camera.scale=clamp(gesture.startScale*ratio,.25,2.4);
+    const ratio=distance(pts[0],pts[1])/gesture.startDistance;camera.scale=clamp(gesture.startScale*ratio,.08,2.4);
     camera.x=center.x-gesture.worldAtCenter.x*camera.scale;camera.y=center.y-gesture.worldAtCenter.y*camera.scale;updateTransform();
   }
   function distance(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
   function clamp(v,min,max){return Math.min(max,Math.max(min,v))}
   function screenToWorld(clientX,clientY){const r=canvas.getBoundingClientRect();return{x:(clientX-r.left-camera.x)/camera.scale,y:(clientY-r.top-camera.y)/camera.scale}}
-  function updateTransform(){viewport.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`)}
+  function updateTransform(){
+    viewport.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
+    canvas.classList.toggle('zoom-overview', camera.scale < 0.34);
+    canvas.classList.toggle('zoom-mid', camera.scale >= 0.34 && camera.scale < 0.68);
+    canvas.classList.toggle('zoom-detail', camera.scale >= 0.68);
+  }
 
   function endpointLabel(id) {
     const entity = model.entities.find(x => x.id === id);
@@ -541,22 +584,151 @@
   function closeSheets(hideScrim=true){document.querySelectorAll('.sheet').forEach(s=>s.classList.add('hidden'));if(hideScrim)el('scrim').classList.add('hidden')}
 
   function autoLayout(target=model,shouldRender=true){
-    const ids=[...target.entities.map(n=>n.id),...target.junctors.map(j=>j.id)];const outgoing=new Map(ids.map(id=>[id,[]]));const incoming=new Map(ids.map(id=>[id,[]]));
-    target.edges.forEach(e=>{if(outgoing.has(e.from)&&incoming.has(e.to)){outgoing.get(e.from).push(e.to);incoming.get(e.to).push(e.from)}});
-    const level=new Map();const queue=[];ids.filter(id=>(outgoing.get(id)?.length||0)===0).forEach(id=>{level.set(id,0);queue.push(id)});
-    while(queue.length){const id=queue.shift();const l=level.get(id);for(const prev of incoming.get(id)||[]){const next=l+1;if(!level.has(prev)||next>level.get(prev)){level.set(prev,next);queue.push(prev)}}}
-    let fallback=Math.max(0,...level.values())+1;for(const id of ids){if(!level.has(id))level.set(id,fallback++)}
-    const buckets={};for(const id of ids){const l=level.get(id);(buckets[l]??=[]).push(id)}
-    const levels=Object.keys(buckets).map(Number).sort((a,b)=>a-b);for(const l of levels){const items=buckets[l];const total=(items.length-1)*260;items.forEach((id,i)=>setPositionOnTarget(target,id,360+i*260-total/2,160+l*170));}
-    if(target===model){scheduleSave();if(shouldRender){render();fitToScreen();}}
+    const ids=[...target.entities.map(n=>n.id),...target.junctors.map(j=>j.id)];
+    if(!ids.length)return;
+    const idSet=new Set(ids);
+    const out=new Map(ids.map(id=>[id,[]]));
+    const inc=new Map(ids.map(id=>[id,[]]));
+    for(const e of target.edges){
+      if(!idSet.has(e.from)||!idSet.has(e.to))continue;
+      out.get(e.from).push(e.to);inc.get(e.to).push(e.from);
+    }
+
+    // 1) Collapse cycles so feedback loops do not explode into fake extra levels.
+    const components=stronglyConnectedComponents(ids,out);
+    const compOf=new Map();components.forEach((members,i)=>members.forEach(id=>compOf.set(id,i)));
+    const compOut=new Map(components.map((_,i)=>[i,new Set()]));
+    const compInc=new Map(components.map((_,i)=>[i,new Set()]));
+    for(const e of target.edges){
+      if(!compOf.has(e.from)||!compOf.has(e.to))continue;
+      const a=compOf.get(e.from),b=compOf.get(e.to);if(a===b)continue;
+      compOut.get(a).add(b);compInc.get(b).add(a);
+    }
+
+    // 2) Longest distance from a sink. Final effects/goals sit at the top (rank 0).
+    const memo=new Map();const visiting=new Set();
+    function rankOf(c){
+      if(memo.has(c))return memo.get(c);
+      if(visiting.has(c))return 0;
+      visiting.add(c);
+      const next=[...compOut.get(c)];
+      const r=next.length?1+Math.max(...next.map(rankOf)):0;
+      visiting.delete(c);memo.set(c,r);return r;
+    }
+    components.forEach((_,i)=>rankOf(i));
+    const nodeRank=new Map();components.forEach((members,i)=>members.forEach(id=>nodeRank.set(id,memo.get(i))));
+
+    // 3) Initial order prefers semantic groups, then prior horizontal position/title.
+    const groupKey=groupKeys(target);
+    const buckets=new Map();
+    for(const id of ids){const r=nodeRank.get(id)||0;if(!buckets.has(r))buckets.set(r,[]);buckets.get(r).push(id)}
+    for(const [r,items] of buckets){
+      items.sort((a,b)=>{
+        const ga=groupKey.get(a)||'~',gb=groupKey.get(b)||'~';if(ga!==gb)return ga.localeCompare(gb,undefined,{numeric:true});
+        const xa=storedX(target,a),xb=storedX(target,b);if(Number.isFinite(xa)&&Number.isFinite(xb)&&xa!==xb)return xa-xb;
+        return nodeTitle(target,a).localeCompare(nodeTitle(target,b));
+      });
+    }
+
+    // 4) Sugiyama-style barycentric sweeps. This is the crossing-reduction step
+    // missing from the original MVP layout.
+    const ranks=[...buckets.keys()].sort((a,b)=>a-b);
+    for(let pass=0;pass<10;pass++){
+      const forward=pass%2===0;
+      const ordered=forward?ranks.slice(1):ranks.slice(0,-1).reverse();
+      for(const r of ordered){
+        const items=buckets.get(r);const referenceRank=forward?r-1:r+1;const ref=buckets.get(referenceRank)||[];
+        const refPos=new Map(ref.map((id,i)=>[id,i]));
+        items.sort((a,b)=>{
+          const ba=barycenter(a,forward?out:inc,refPos);const bb=barycenter(b,forward?out:inc,refPos);
+          if(ba!=null&&bb!=null&&ba!==bb)return ba-bb;if(ba!=null&&bb==null)return-1;if(ba==null&&bb!=null)return 1;
+          const ga=groupKey.get(a)||'~',gb=groupKey.get(b)||'~';return ga.localeCompare(gb,undefined,{numeric:true});
+        });
+      }
+    }
+
+    // 5) Position each rank. Extra gaps between group clusters make large models scannable.
+    const maxCount=Math.max(...[...buckets.values()].map(x=>x.length));
+    const baseX=420;
+    for(const r of ranks){
+      const items=buckets.get(r);let cursor=0;let prevGroup=null;const positions=[];
+      for(const id of items){
+        const g=groupKey.get(id)||'~';
+        if(prevGroup!==null&&g!==prevGroup)cursor+=GROUP_GAP;
+        positions.push({id,x:cursor});cursor+=NODE_W+NODE_GAP;prevGroup=g;
+      }
+      const width=Math.max(0,cursor-(NODE_W+NODE_GAP));
+      const shift=baseX-width/2;
+      positions.forEach(p=>setPositionOnTarget(target,p.id,p.x+shift,170+r*LEVEL_GAP));
+    }
+
+    // 6) AND diamonds belong between their conditions and result. Nudge them onto
+    // the median lane of their neighbors so they do not create huge triangular loops.
+    for(const j of target.junctors){
+      const neighbors=[...(inc.get(j.id)||[]),...(out.get(j.id)||[])].map(id=>positionOnTarget(target,id)).filter(Boolean);
+      if(!neighbors.length)continue;
+      const xs=neighbors.map(p=>p.x).sort((a,b)=>a-b);const median=xs[Math.floor(xs.length/2)];
+      const own=positionOnTarget(target,j.id);setPositionOnTarget(target,j.id,median,own?.y||170+(nodeRank.get(j.id)||0)*LEVEL_GAP);
+    }
+
+    target.document_attributes=target.document_attributes||{};
+    target.document_attributes.FLOWOS_LAYOUT_VERSION=LAYOUT_VERSION;
+    target.document_attributes.FLOWOS_LAYOUT_ENGINE='hierarchical_barycentric_v2';
+    if(target===model){scheduleSave();if(shouldRender){render();if(model.entities.length>60)focusGoal();else fitToScreen();}}
   }
+
+  function stronglyConnectedComponents(ids,out){
+    let index=0;const stack=[];const onStack=new Set();const indices=new Map();const low=new Map();const comps=[];
+    function visit(v){
+      indices.set(v,index);low.set(v,index);index++;stack.push(v);onStack.add(v);
+      for(const w of out.get(v)||[]){
+        if(!indices.has(w)){visit(w);low.set(v,Math.min(low.get(v),low.get(w)))}
+        else if(onStack.has(w))low.set(v,Math.min(low.get(v),indices.get(w)));
+      }
+      if(low.get(v)===indices.get(v)){
+        const comp=[];let w;do{w=stack.pop();onStack.delete(w);comp.push(w)}while(w!==v);comps.push(comp);
+      }
+    }
+    ids.forEach(v=>{if(!indices.has(v))visit(v)});return comps;
+  }
+
+  function barycenter(id,neighborMap,refPos){
+    const vals=(neighborMap.get(id)||[]).map(n=>refPos.get(n)).filter(Number.isFinite);if(!vals.length)return null;return vals.reduce((a,b)=>a+b,0)/vals.length;
+  }
+
+  function groupKeys(target){
+    const result=new Map();const groupMap=new Map((target.groups||[]).map(g=>[g.id,g]));
+    const parent=new Map();for(const g of target.groups||[])for(const child of g.children||[])if(groupMap.has(child))parent.set(child,g.id);
+    function pathFor(gid){const path=[];const seen=new Set();let cur=gid;while(cur&&!seen.has(cur)){seen.add(cur);path.unshift(cur);cur=parent.get(cur)}return path.join('/');}
+    for(const g of target.groups||[]){const key=pathFor(g.id);for(const child of g.children||[]){if(!groupMap.has(child)&&!result.has(child))result.set(child,key)}}
+    return result;
+  }
+
+  function storedX(target,id){const o=target.entities.find(n=>n.id===id)||target.junctors.find(j=>j.id===id);return Number(o?.attributes?.FLOWOS_MOBILE_X)}
+  function nodeTitle(target,id){return target.entities.find(n=>n.id===id)?.title||target.junctors.find(j=>j.id===id)?.operator||id}
+  function positionOnTarget(target,id){const o=target.entities.find(n=>n.id===id)||target.junctors.find(j=>j.id===id);if(!o)return null;return{x:Number(o.attributes?.FLOWOS_MOBILE_X||0),y:Number(o.attributes?.FLOWOS_MOBILE_Y||0)}}
 
   function setPositionOnTarget(target,id,x,y){const obj=target.entities.find(n=>n.id===id)||target.junctors.find(j=>j.id===id);if(!obj)return;obj.attributes=obj.attributes||{};obj.attributes.FLOWOS_MOBILE_X=x;obj.attributes.FLOWOS_MOBILE_Y=y;}
 
   function fitToScreen(){
     const pts=[...model.entities,...model.junctors].map(n=>({x:Number(n.attributes.FLOWOS_MOBILE_X||0),y:Number(n.attributes.FLOWOS_MOBILE_Y||0)}));if(!pts.length){camera={x:0,y:0,scale:1};updateTransform();return;}
-    const r=canvas.getBoundingClientRect();const minX=Math.min(...pts.map(p=>p.x))-NODE_W/2-40,maxX=Math.max(...pts.map(p=>p.x))+NODE_W/2+40,minY=Math.min(...pts.map(p=>p.y))-NODE_H/2-40,maxY=Math.max(...pts.map(p=>p.y))+NODE_H/2+40;
-    const w=maxX-minX,h=maxY-minY;camera.scale=clamp(Math.min(r.width/w,r.height/h),.25,1.15);camera.x=(r.width-w*camera.scale)/2-minX*camera.scale;camera.y=(r.height-h*camera.scale)/2-minY*camera.scale;updateTransform();
+    const r=canvas.getBoundingClientRect();const minX=Math.min(...pts.map(p=>p.x))-NODE_W/2-60,maxX=Math.max(...pts.map(p=>p.x))+NODE_W/2+60,minY=Math.min(...pts.map(p=>p.y))-NODE_H/2-60,maxY=Math.max(...pts.map(p=>p.y))+NODE_H/2+60;
+    const w=maxX-minX,h=maxY-minY;camera.scale=clamp(Math.min(r.width/w,r.height/h),.08,1.15);camera.x=(r.width-w*camera.scale)/2-minX*camera.scale;camera.y=(r.height-h*camera.scale)/2-minY*camera.scale;updateTransform();renderEdges();renderNodes();
+  }
+
+  function focusGoal(){
+    if(!model.entities.length)return fitToScreen();
+    const entityIDs=new Set(model.entities.map(n=>n.id));
+    const outgoingCount=new Map(model.entities.map(n=>[n.id,0]));
+    for(const e of model.edges){if(entityIDs.has(e.from))outgoingCount.set(e.from,(outgoingCount.get(e.from)||0)+1)}
+    const sinks=model.entities.filter(n=>(outgoingCount.get(n.id)||0)===0);
+    const target=(sinks.sort((a,b)=>goalPriority(b)-goalPriority(a))[0]||model.entities[0]);
+    const p=nodePosition(target.id);const r=canvas.getBoundingClientRect();camera.scale=clamp(model.entities.length>150?.58:.72,.08,1.15);camera.x=r.width/2-p.x*camera.scale;camera.y=Math.min(r.height*.24-p.y*camera.scale,80);selectedNodeId=target.id;updateTransform();renderEdges();renderNodes();
+  }
+
+  function goalPriority(n){
+    const cls=String(n.class||'').toLowerCase(),title=String(n.title||'').toLowerCase();let score=0;
+    if(cls.includes('objective')||cls.includes('goal'))score+=5;if(title.includes('goal')||title.includes('uncompromised'))score+=3;if(title.includes('value'))score+=1;return score;
   }
 
   function exportJSONText(){updateCounts();return JSON.stringify(model,null,2)}
@@ -577,14 +749,14 @@
       const next = normalizeModel(JSON.parse(text));
       if(!confirm('Replace the current model with the JSON on your clipboard?')) return;
       model = next; selectedNodeId=null; selectedEdgeId=null; selectedJunctorId=null; connectSourceId=null; connectMode=false; camera={x:0,y:0,scale:1};
-      scheduleSave(); render(); fitToScreen(); closeSheets(); toast('Revised JSON loaded.');
+      scheduleSave(); render(); if(model.entities.length>60)focusGoal();else fitToScreen(); closeSheets(); toast(model.entities.length>60?'Revised JSON loaded — showing the goal area.':'Revised JSON loaded.');
     } catch(err) { toast(`Paste failed: ${err.message || 'clipboard unavailable'}`); }
   }
 
   function toast(message){const t=el('toast');t.textContent=message;t.classList.remove('hidden');clearTimeout(t._timer);t._timer=setTimeout(()=>t.classList.add('hidden'),2600)}
 
   function importFile(file){
-    const reader=new FileReader();reader.onload=()=>{try{model=normalizeModel(JSON.parse(reader.result));selectedNodeId=null;connectSourceId=null;connectMode=false;camera={x:0,y:0,scale:1};scheduleSave();render();fitToScreen();closeSheets();toast('RIT JSON imported.')}catch(err){toast(`Import failed: ${err.message}`)}};reader.onerror=()=>toast('Could not read that file.');reader.readAsText(file);
+    const reader=new FileReader();reader.onload=()=>{try{model=normalizeModel(JSON.parse(reader.result));selectedNodeId=null;connectSourceId=null;connectMode=false;camera={x:0,y:0,scale:1};scheduleSave();render();if(model.entities.length>60)focusGoal();else fitToScreen();closeSheets();toast(model.entities.length>60?'Large model organized — showing the goal area.':'RIT JSON imported.')}catch(err){toast(`Import failed: ${err.message}`)}};reader.onerror=()=>toast('Could not read that file.');reader.readAsText(file);
   }
 
   function initControls(){
@@ -604,14 +776,14 @@
     el('newProjectBtn').addEventListener('click',()=>{if(confirm('Start a new blank model? Export first if you need to keep this one.')){model=newBlankModel();selectedNodeId=null;connectSourceId=null;camera={x:0,y:0,scale:1};scheduleSave();render();closeSheets();}});
     el('importBtn').addEventListener('click',()=>el('fileInput').click());el('fileInput').addEventListener('change',ev=>{const file=ev.target.files?.[0];if(file)importFile(file);ev.target.value=''});
     el('exportBtn').addEventListener('click',downloadFile);el('shareBtn').addEventListener('click',shareFile);el('copyBtn').addEventListener('click',copyJSON);el('pasteBtn').addEventListener('click',pasteJSON);
-    el('autoLayoutBtn').addEventListener('click',()=>{autoLayout();closeSheets();toast('Layout rebuilt.')});el('fitBtn').addEventListener('click',()=>{fitToScreen();closeSheets()});
+    el('autoLayoutBtn').addEventListener('click',()=>{autoLayout();closeSheets();toast(model.entities.length>60?'Hierarchy rebuilt — crossings reduced.':'Layout rebuilt.')});el('fitBtn').addEventListener('click',()=>{fitToScreen();closeSheets()});el('focusGoalBtn')?.addEventListener('click',()=>{focusGoal();closeSheets()});
     el('projectTitleInput').addEventListener('input',ev=>renameProject(ev.target.value,false));el('renameInput').addEventListener('input',ev=>renameProject(ev.target.value,false));
     window.addEventListener('resize',()=>requestAnimationFrame(updateTransform));
   }
 
   function renameProject(value,save=true){model.document.title=value.trim()||'Untitled Logic';renderHeader();if(save)scheduleSave();else scheduleSave()}
 
-  loadSaved();initControls();render();setTimeout(()=>{if(model.entities.length)fitToScreen()},80);
+  loadSaved();initControls();render();setTimeout(()=>{if(model.entities.length){if(model.entities.length>60)focusGoal();else fitToScreen()}},80);
 
   if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));}
 })();

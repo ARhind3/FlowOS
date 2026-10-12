@@ -1,4 +1,34 @@
-# FlowOS Logic MVP
+# FlowOS Logic MVP 1.1
+
+## What changed for large models
+
+Version 1.1 replaces the original grid-like importer layout with a hierarchical causal layout designed for large PFD/PRT/CRT models. It now:
+
+- places final effects/goals at the top and prerequisites below them;
+- collapses feedback cycles during ranking so cycles do not create arbitrary extra rows;
+- performs repeated barycentric ordering sweeps to reduce edge crossings;
+- keeps explicit AND diamonds between their inputs and effect;
+- uses semantic group membership as a clustering hint;
+- routes normal causal links vertically instead of creating large side loops;
+- turns connectors into true hairlines when zoomed out instead of keeping a fixed screen-width stroke;
+- hides unreadable node text at extreme overview zoom;
+- fades unrelated logic when one statement is selected;
+- opens large models focused on the goal area instead of dumping the whole graph onto the phone screen;
+- adds **File → Jump to goal** and keeps **File → Fit model on screen** for whole-system overview.
+
+The JSON format is unchanged: `P3_FLYING_LOGIC_EXCHANGE` v0.3. Layout coordinates remain mobile-only attributes and round-trip with the file.
+
+## Updating the copy already on GitHub Pages
+
+1. Unzip this package.
+2. In your existing `FlowOS` GitHub repository, upload the **contents** of this folder to the repository root, replacing the old files (`index.html`, `app.js`, `styles.css`, `sw.js`, etc.).
+3. Commit the changes to `main`. You do **not** need to delete/recreate the GitHub Pages site or change its URL.
+4. Open your FlowOS URL once in Safari and reload it so iOS sees the new service worker.
+5. Close and reopen the Home Screen app. If the old version appears on the first launch, close it and open it one more time; the service-worker cache version changed in 1.1.
+6. Your locally autosaved model uses the same storage key, so updating the app files does not intentionally erase it. Export JSON first anyway if the model matters.
+7. Existing v1 mobile coordinates are automatically rebuilt once using the v1.1 layout engine. You can also force it with **File → Auto layout**.
+
+---
 
 This branch is intentionally narrow: **capture connected logic on an iPhone/iPad and exchange it through the existing RIT JSON format.**
 

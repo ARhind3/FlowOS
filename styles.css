@@ -26,10 +26,23 @@ button { cursor: pointer; }
 #workspace { position: relative; min-height: 0; background: var(--bg); overflow: hidden; touch-action: none; }
 #canvas { width: 100%; height: 100%; display: block; background-color: var(--bg); background-image: radial-gradient(circle at 1px 1px, rgba(70,90,115,.14) 1px, transparent 0); background-size: 24px 24px; touch-action: none; }
 #viewport { transform-origin: 0 0; }
-.edge-line { fill: none; stroke: #8290a2; stroke-width: 2.2; vector-effect: non-scaling-stroke; marker-end: url(#arrow); }
+.edge-line { fill: none; stroke: #8290a2; stroke-width: 2.2; marker-end: url(#arrow); transition: opacity .12s ease, stroke .12s ease; }
 .edge-line.selected { stroke: var(--accent); stroke-width: 3; }
 .edge-hit { fill: none; stroke: rgba(0,0,0,0); stroke-width: 20; vector-effect: non-scaling-stroke; pointer-events: stroke; }
 .arrow-head { fill: #8290a2; }
+/* Large-model level of detail. At overview zoom, text is unreadable anyway,
+   so FlowOS becomes a quiet map instead of a wall of ink. */
+.zoom-overview .edge-line { opacity: .13; }
+.zoom-overview .edge-hit { pointer-events: none; }
+.zoom-overview .node text, .zoom-overview .junctor text { opacity: 0; }
+.zoom-overview .node { filter: none; }
+.zoom-mid .node .meta { opacity: 0; }
+.edge-line.unrelated { opacity: .055; }
+.edge-line.related { stroke: #526d91; opacity: .88; }
+.node.unrelated, .junctor.unrelated { opacity: .24; }
+.node, .junctor { transition: opacity .12s ease; }
+.edge-line.back-edge { stroke-dasharray: 10 8; }
+
 .node { filter: url(#nodeShadow); }
 .node rect { rx: 14; ry: 14; stroke: #c6d1df; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .node.selected rect { stroke: var(--accent); stroke-width: 3.2; }
